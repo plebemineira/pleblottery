@@ -1,3 +1,31 @@
+# SRI Pool config
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+#authority_secret_key = "7qbpUjScc865jyX2kiB4NVJANoC7GA7TAJupdzXWkc62"
+cert_validity_sec = 3600
+test_only_listen_adress_plain =  "0.0.0.0:34250"
+listen_address = "0.0.0.0:34254"
+
+# List of coinbase outputs used to build the coinbase tx
+# ! Right now only one output is supported, so comment all the ones you don't need !
+# For P2PK, P2PKH, P2WPKH, P2TR a public key is needed. For P2SH and P2WSH, a redeem script is needed.
+coinbase_outputs = [
+    #{ output_script_type = "P2PK", output_script_value = "0372c47307e5b75ce365daf835f226d246c5a7a92fe24395018d5552123354f086" },
+    { output_script_type = "P2PKH", output_script_value = "0268e23acd7c14f8ece9c59fbacce0bfa844a461af35a1c155c38b78060fd8b509" },
+    #{ output_script_type = "P2SH", output_script_value = "00142ef89234bc95136eb9e6fee9d32722ebd8c1f0ab" },
+    #{ output_script_type = "P2WSH", output_script_value = "00142ef89234bc95136eb9e6fee9d32722ebd8c1f0ab" },
+    #    { output_script_type = "P2WPKH", output_script_value = "0211d2f529c7551367bb58ff09a3131a6b002e3788883041bdc8e1a77afb07437d" },
+    #{ output_script_type = "P2TR", output_script_value = "036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075" },
+]
+
+# Pool signature (string to be included in coinbase tx)
+pool_signature = "Stratum v2 SRI Pool"
+
+# Template Provider config
+# Local TP (this is pointing to localhost so you must run a TP locally for this configuration to work)
+tp_address = "127.0.0.1:8442"
+
+
 # Braiins Pool Upstream Connection
 # upstream_authority_pubkey = "u95GEReVMjK6k5YqiSFNqqTnKU4ypU2Wm8awa6tmbmDmk1bWt"
 # upstream_address = "18.196.32.109"
@@ -26,7 +54,7 @@ coinbase_reward_sat = 5_000_000_000
 # Difficulty params
 [downstream_difficulty_config]
 # hashes/s of the weakest miner that will be connecting (e.g.: 10 Th/s = 10_000_000_000_000.0)
-min_individual_miner_hashrate=10_000_000_000_000.0
+min_individual_miner_hashrate=10_000.0
 # target number of shares per minute the miner should be sending
 shares_per_minute = 6.0
 
@@ -34,4 +62,4 @@ shares_per_minute = 6.0
 # interval in seconds to elapse before updating channel hashrate with the pool
 channel_diff_update_interval = 60
 # estimated accumulated hashrate of all downstream miners (e.g.: 10 Th/s = 10_000_000_000_000.0)
-channel_nominal_hashrate = 10_000_000_000_000.0
+channel_nominal_hashrate = 10_000.0
