@@ -1,4 +1,7 @@
 #![allow(special_module_name)]
+
+mod args;
+
 use async_channel::{bounded, unbounded};
 use tracing::{error, info, warn, debug};
 use tokio::select;
@@ -14,22 +17,15 @@ use futures::FutureExt;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let pool_handle = task::spawn(async move {
-        pool().await;
-    });
+    let args = match args::Args::from_args() {
+        Ok(cfg) => cfg,
+        Err(help) => {
+            error!("{}", help);
+            return;
+        }
+    };
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-
-    let tproxy_handle = task::spawn(async move {
-        tproxy().await;
-    });
-
-    futures::future::join_all(vec![pool_handle, tproxy_handle]).await;
-}
-
-async fn pool() {
-    // Load config
-    let config: pool_sv2::mining_pool::Configuration = match std::fs::read_to_string("pool-config.toml") {
+    let pool_config: pool_sv2::mining_pool::Configuration = match std::fs::read_to_string(&args.config_path) {
         Ok(c) => match toml::from_str(&c) {
             Ok(c) => c,
             Err(e) => {
@@ -43,6 +39,34 @@ async fn pool() {
         }
     };
 
+    let proxy_config: translator_sv2::proxy_config::ProxyConfig = match std::fs::read_to_string(&args.config_path) {
+        Ok(c) => match toml::from_str(&c) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to parse config: {}", e);
+                return;
+            }
+        },
+        Err(e) => {
+            error!("Failed to read config: {}", e);
+            return;
+        }
+    };
+
+    let pool_handle = task::spawn(async move {
+        pool(pool_config).await;
+    });
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+    let tproxy_handle = task::spawn(async move {
+        tproxy(proxy_config).await;
+    });
+
+    futures::future::join_all(vec![pool_handle, tproxy_handle]).await;
+}
+
+async fn pool(config: pool_sv2::mining_pool::Configuration) {
     let (status_tx, status_rx) = unbounded();
     let (s_new_t, r_new_t) = bounded(10);
     let (s_prev_hash, r_prev_hash) = bounded(10);
@@ -133,21 +157,7 @@ async fn pool() {
 }
 
 
-async fn tproxy() {
-    let proxy_config: translator_sv2::proxy_config::ProxyConfig = match std::fs::read_to_string("pleblottery-config.toml") {
-        Ok(c) => match toml::from_str(&c) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to parse config: {}", e);
-                return;
-            }
-        },
-        Err(e) => {
-            error!("Failed to read config: {}", e);
-            return;
-        }
-    };
-
+async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
     let (tx_status, rx_status) = unbounded();
 
     // `tx_sv1_bridge` sender is used by `Downstream` to send a `DownstreamMessages` message to
