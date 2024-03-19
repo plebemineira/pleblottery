@@ -358,7 +358,7 @@ impl Upstream {
                                 // range 1 is the extranonce1 added by the tproxy
                                 // range 2 is the extranonce2 used by the miner for rolling
                                 // range 0 + range 1 is the extranonce1 sent to the miner
-                                let tproxy_e1_len = crate::tproxy_utils::proxy_extranonce1_len(
+                                let tproxy_e1_len = proxy_extranonce1_len(
                                     m.extranonce_size as usize,
                                     miner_extranonce2_size,
                                 );
@@ -643,7 +643,7 @@ impl ParseUpstreamMiningMessages<Downstream, NullDownstreamMiningSelector, NoRou
         &mut self,
         m: roles_logic_sv2::mining_sv2::OpenExtendedMiningChannelSuccess,
     ) -> Result<SendTo<Downstream>, RolesLogicError> {
-        let tproxy_e1_len = crate::tproxy_utils::proxy_extranonce1_len(
+        let tproxy_e1_len = proxy_extranonce1_len(
             m.extranonce_size as usize,
             self.min_extranonce_size.into(),
         ) as u16;
@@ -802,4 +802,12 @@ impl ParseUpstreamMiningMessages<Downstream, NullDownstreamMiningSelector, NoRou
     ) -> Result<roles_logic_sv2::handlers::mining::SendTo<Downstream>, RolesLogicError> {
         unimplemented!()
     }
+}
+
+pub fn proxy_extranonce1_len(
+    channel_extranonce2_size: usize,
+    downstream_extranonce2_len: usize,
+) -> usize {
+    // full_extranonce_len - pool_extranonce1_len - miner_extranonce2 = tproxy_extranonce1_len
+    channel_extranonce2_size - downstream_extranonce2_len
 }
