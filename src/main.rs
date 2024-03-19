@@ -1,6 +1,10 @@
 #![allow(special_module_name)]
 
 mod args;
+mod template_receiver;
+mod status;
+mod error;
+mod mining_pool;
 
 use async_channel::{bounded, unbounded};
 use tracing::{error, info, warn, debug};
@@ -25,7 +29,7 @@ async fn main() {
         }
     };
 
-    let pool_config: pool_sv2::mining_pool::Configuration = match std::fs::read_to_string(&args.config_path) {
+    let pool_config: mining_pool::Configuration = match std::fs::read_to_string(&args.config_path) {
         Ok(c) => match toml::from_str(&c) {
             Ok(c) => c,
             Err(e) => {
@@ -66,13 +70,13 @@ async fn main() {
     futures::future::join_all(vec![pool_handle, tproxy_handle]).await;
 }
 
-async fn pool(config: pool_sv2::mining_pool::Configuration) {
+async fn pool(config: mining_pool::Configuration) {
     let (status_tx, status_rx) = unbounded();
     let (s_new_t, r_new_t) = bounded(10);
     let (s_prev_hash, r_prev_hash) = bounded(10);
     let (s_solution, r_solution) = bounded(10);
     let (s_message_recv_signal, r_message_recv_signal) = bounded(10);
-    let coinbase_output_result = pool_sv2::mining_pool::get_coinbase_output(&config);
+    let coinbase_output_result = mining_pool::get_coinbase_output(&config);
     let coinbase_output_len = match coinbase_output_result {
         Ok(coinbase_output) => coinbase_output.len() as u32,
         Err(err) => {
@@ -81,13 +85,14 @@ async fn pool(config: pool_sv2::mining_pool::Configuration) {
         }
     };
     let tp_authority_public_key = config.tp_authority_public_key;
-    let template_rx_res = pool_sv2::template_receiver::TemplateRx::connect(
+
+    let template_rx_res = template_receiver::TemplateRx::connect(
         config.tp_address.parse().unwrap(),
         s_new_t,
         s_prev_hash,
         r_solution,
         r_message_recv_signal,
-        pool_sv2::status::Sender::Upstream(status_tx.clone()),
+        status::Sender::Upstream(status_tx.clone()),
         coinbase_output_len,
         tp_authority_public_key,
     )
@@ -98,13 +103,13 @@ async fn pool(config: pool_sv2::mining_pool::Configuration) {
         return;
     }
 
-    let pool = pool_sv2::mining_pool::Pool::start(
+    let pool = mining_pool::Pool::start(
         config.clone(),
         r_new_t,
         r_prev_hash,
         s_solution,
         s_message_recv_signal,
-        pool_sv2::status::Sender::DownstreamListener(status_tx),
+        status::Sender::DownstreamListener(status_tx),
     );
 
     // Start the error handling loop
@@ -125,25 +130,25 @@ async fn pool(config: pool_sv2::mining_pool::Configuration) {
                 break;
             }
         };
-        let task_status: pool_sv2::status::Status = task_status.unwrap();
+        let task_status: status::Status = task_status.unwrap();
 
         match task_status.state {
             // Should only be sent by the downstream listener
-            pool_sv2::status::State::DownstreamShutdown(err) => {
+            status::State::DownstreamShutdown(err) => {
                 error!(
                     "SHUTDOWN from Downstream: {}\nTry to restart the downstream listener",
                     err
                 );
                 break;
             }
-            pool_sv2::status::State::TemplateProviderShutdown(err) => {
+            status::State::TemplateProviderShutdown(err) => {
                 error!("SHUTDOWN from Upstream: {}\nTry to reconnecting or connecting to a new upstream", err);
                 break;
             }
-            pool_sv2::status::State::Healthy(msg) => {
+            status::State::Healthy(msg) => {
                 info!("HEALTHY message: {}", msg);
             }
-            pool_sv2::status::State::DownstreamInstanceDropped(downstream_id) => {
+            status::State::DownstreamInstanceDropped(downstream_id) => {
                 warn!("Dropping downstream instance {} from pool", downstream_id);
                 if pool
                     .safe_lock(|p| p.remove_downstream(downstream_id))

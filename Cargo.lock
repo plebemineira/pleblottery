@@ -1193,11 +1193,22 @@ name = "pleblottery"
 version = "0.1.0"
 dependencies = [
  "async-channel 1.9.0",
+ "async-recursion 1.1.0",
  "async-std",
+ "binary_sv2",
+ "codec_sv2",
+ "const_sv2",
+ "error_handling",
  "futures",
+ "key-utils",
  "mining_proxy_sv2",
- "pool_sv2",
+ "network_helpers",
+ "nohash-hasher",
+ "noise_sv2",
  "roles_logic_sv2",
+ "secp256k1 0.28.2",
+ "serde",
+ "stratum-common",
  "sv1_api",
  "tokio",
  "toml",
@@ -1257,33 +1268,6 @@ dependencies = [
  "cpufeatures",
  "opaque-debug",
  "universal-hash",
-]
-
-[[package]]
-name = "pool_sv2"
-version = "0.1.0"
-source = "git+https://github.com/stratum-mining/stratum.git#361f12ba72053422d64bfcb7ab010d5d45e1f0a5"
-dependencies = [
- "async-channel 1.9.0",
- "async-recursion 1.1.0",
- "binary_sv2",
- "buffer_sv2",
- "codec_sv2",
- "const_sv2",
- "error_handling",
- "key-utils",
- "network_helpers",
- "nohash-hasher",
- "noise_sv2",
- "rand",
- "roles_logic_sv2",
- "secp256k1 0.28.2",
- "serde",
- "stratum-common",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

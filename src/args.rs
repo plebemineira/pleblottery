@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use tracing::error;
 
 #[derive(Debug)]
 pub struct Args {
