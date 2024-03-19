@@ -1,4 +1,4 @@
-use crate::error::{PoolError, PoolResult};
+use crate::error::{LotteryError, PoolResult};
 use crate::{
     mining_pool::{EitherFrame, StdFrame},
 };
@@ -19,7 +19,7 @@ pub struct SetupConnectionHandler {}
 
 impl SetupConnectionHandler {
     #[allow(clippy::result_large_err)]
-    fn get_setup_connection_message(address: SocketAddr) -> PoolResult<SetupConnection<'static>> {
+    fn get_setup_connection_message(address: SocketAddr) -> PoolResult<'static, SetupConnection<'static>> {
         let endpoint_host = address.ip().to_string().into_bytes().try_into()?;
         let vendor = String::new().try_into()?;
         let hardware_version = String::new().try_into()?;
@@ -43,7 +43,7 @@ impl SetupConnectionHandler {
         receiver: &mut Receiver<EitherFrame>,
         sender: &mut Sender<EitherFrame>,
         address: SocketAddr,
-    ) -> PoolResult<()> {
+    ) -> PoolResult<'static, ()> {
         let setup_connection = Self::get_setup_connection_message(address)?;
 
         let sv2_frame: StdFrame = PoolMessages::Common(setup_connection.into()).try_into()?;
@@ -54,10 +54,10 @@ impl SetupConnectionHandler {
             .recv()
             .await?
             .try_into()
-            .map_err(|e| PoolError::Codec(codec_sv2::Error::FramingSv2Error(e)))?;
+            .map_err(|e| LotteryError::Codec(codec_sv2::Error::FramingSv2Error(e)))?;
         let message_type = incoming
             .get_header()
-            .ok_or_else(|| PoolError::Custom(String::from("No header set")))?
+            .ok_or_else(|| LotteryError::Custom(String::from("No header set")))?
             .msg_type();
         let payload = incoming.payload();
 

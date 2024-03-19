@@ -1,5 +1,5 @@
 use super::super::{
-    error::{PoolError, PoolResult},
+    error::{LotteryError, PoolResult},
     mining_pool::{EitherFrame, StdFrame},
 };
 use async_channel::{Receiver, Sender};
@@ -33,12 +33,12 @@ impl SetupConnectionHandler {
     pub fn new() -> Self {
         Self { header_only: None }
     }
-    pub async fn setup(
+    pub async fn setup<'a>(
         self_: Arc<Mutex<Self>>,
         receiver: &mut Receiver<EitherFrame>,
         sender: &mut Sender<EitherFrame>,
         address: SocketAddr,
-    ) -> PoolResult<CommonDownstreamData> {
+    ) -> PoolResult<'a, CommonDownstreamData> {
         // read stdFrame from receiver
 
         let mut incoming: StdFrame = match receiver.recv().await {
@@ -61,7 +61,7 @@ impl SetupConnectionHandler {
 
         let message_type = incoming
             .get_header()
-            .ok_or_else(|| PoolError::Custom(String::from("No header set")))?
+            .ok_or_else(|| LotteryError::Custom(String::from("No header set")))?
             .msg_type();
         let payload = incoming.payload();
         let response = ParseDownstreamCommonMessages::handle_message_common(
@@ -71,7 +71,7 @@ impl SetupConnectionHandler {
             CommonRoutingLogic::None,
         )?;
 
-        let message = response.into_message().ok_or(PoolError::RolesLogic(
+        let message = response.into_message().ok_or(LotteryError::RolesLogic(
             roles_logic_sv2::Error::NoDownstreamsConnected,
         ))?;
 

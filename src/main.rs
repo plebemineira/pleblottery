@@ -5,6 +5,11 @@ mod template_receiver;
 mod status;
 mod error;
 mod mining_pool;
+mod downstream_sv1;
+mod tproxy_config;
+mod tproxy;
+mod upstream_sv2;
+mod tproxy_utils;
 
 use async_channel::{bounded, unbounded};
 use tracing::{error, info, warn, debug};
@@ -43,7 +48,7 @@ async fn main() {
         }
     };
 
-    let proxy_config: translator_sv2::proxy_config::ProxyConfig = match std::fs::read_to_string(&args.config_path) {
+    let proxy_config: tproxy_config::TProxyConfig = match std::fs::read_to_string(&args.config_path) {
         Ok(c) => match toml::from_str(&c) {
             Ok(c) => c,
             Err(e) => {
@@ -157,12 +162,20 @@ async fn pool(config: mining_pool::Configuration) {
                     break;
                 }
             }
+            status::State::BridgeShutdown(err) => {
+                error!("SHUTDOWN from: {}", err);
+                break;
+            }
+            status::State::UpstreamShutdown(err) => {
+                error!("SHUTDOWN from: {}", err);
+                break;
+            }
         }
     }
 }
 
 
-async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
+async fn tproxy(proxy_config: tproxy_config::TProxyConfig) {
     let (tx_status, rx_status) = unbounded();
 
     // `tx_sv1_bridge` sender is used by `Downstream` to send a `DownstreamMessages` message to
@@ -205,7 +218,7 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
     let diff_config = Arc::new(roles_logic_sv2::utils::Mutex::new(proxy_config.upstream_difficulty_config.clone()));
 
     // Instantiate a new `Upstream` (SV2 Pool)
-    let upstream = match translator_sv2::upstream_sv2::Upstream::new(
+    let upstream = match upstream_sv2::Upstream::new(
         upstream_addr,
         proxy_config.upstream_authority_pubkey,
         rx_sv2_submit_shares_ext,
@@ -213,7 +226,7 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
         tx_sv2_new_ext_mining_job,
         proxy_config.min_extranonce2_size,
         tx_sv2_extranonce,
-        translator_sv2::status::Sender::Upstream(tx_status.clone()),
+        status::Sender::Upstream(tx_status.clone()),
         target.clone(),
         diff_config.clone(),
     )
@@ -232,7 +245,7 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
     //fail
     task::spawn(async move {
         // Connect to the SV2 Upstream role
-        match translator_sv2::upstream_sv2::Upstream::connect(
+        match upstream_sv2::Upstream::connect(
             upstream.clone(),
             proxy_config.min_supported_version,
             proxy_config.max_supported_version,
@@ -247,14 +260,14 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
         }
 
         // Start receiving messages from the SV2 Upstream role
-        if let Err(e) = translator_sv2::upstream_sv2::Upstream::parse_incoming(upstream.clone()) {
+        if let Err(e) = upstream_sv2::Upstream::parse_incoming(upstream.clone()) {
             error!("failed to create sv2 parser: {}", e);
             return;
         }
 
         debug!("Finished starting upstream listener");
         // Start task handler to receive submits from the SV1 Downstream role once it connects
-        if let Err(e) = translator_sv2::upstream_sv2::Upstream::handle_submit(upstream.clone()) {
+        if let Err(e) = upstream_sv2::Upstream::handle_submit(upstream.clone()) {
             error!("Failed to create submit handler: {}", e);
             return;
         }
@@ -271,18 +284,18 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
         }
 
         // Instantiate a new `Bridge` and begins handling incoming messages
-        let b = translator_sv2::proxy::Bridge::new(
+        let b = tproxy::Bridge::new(
             rx_sv1_downstream,
             tx_sv2_submit_shares_ext,
             rx_sv2_set_new_prev_hash,
             rx_sv2_new_ext_mining_job,
             tx_sv1_notify.clone(),
-            translator_sv2::status::Sender::Bridge(tx_status.clone()),
+            status::Sender::Bridge(tx_status.clone()),
             extended_extranonce,
             target,
             up_id,
         );
-        translator_sv2::proxy::Bridge::start(b.clone());
+        tproxy::Bridge::start(b.clone());
 
         // Format `Downstream` connection address
         let downstream_addr = SocketAddr::new(
@@ -291,11 +304,11 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
         );
 
         // Accept connections from one or more SV1 Downstream roles (SV1 Mining Devices)
-        translator_sv2::downstream_sv1::Downstream::accept_connections(
+        downstream_sv1::Downstream::accept_connections(
             downstream_addr,
             tx_sv1_bridge,
             tx_sv1_notify,
-            translator_sv2::status::Sender::DownstreamListener(tx_status.clone()),
+            status::Sender::DownstreamListener(tx_status.clone()),
             b,
             proxy_config.downstream_difficulty_config,
             diff_config,
@@ -323,24 +336,32 @@ async fn tproxy(proxy_config: translator_sv2::proxy_config::ProxyConfig) {
                 break;
             }
         };
-        let task_status: translator_sv2::status::Status = task_status.unwrap();
+        let task_status: status::Status = task_status.unwrap();
 
         match task_status.state {
             // Should only be sent by the downstream listener
-            translator_sv2::status::State::DownstreamShutdown(err) => {
+            status::State::DownstreamShutdown(err) => {
                 error!("SHUTDOWN from: {}", err);
                 break;
             }
-            translator_sv2::status::State::BridgeShutdown(err) => {
+            status::State::BridgeShutdown(err) => {
                 error!("SHUTDOWN from: {}", err);
                 break;
             }
-            translator_sv2::status::State::UpstreamShutdown(err) => {
+            status::State::UpstreamShutdown(err) => {
                 error!("SHUTDOWN from: {}", err);
                 break;
             }
-            translator_sv2::status::State::Healthy(msg) => {
+            status::State::Healthy(msg) => {
                 info!("HEALTHY message: {}", msg);
+            }
+            status::State::TemplateProviderShutdown(err) => {
+                error!("SHUTDOWN from: {}", err);
+                break;
+            }
+            status::State::DownstreamInstanceDropped(downstream_id) => {
+                error!("SHUTDOWN from: {}", downstream_id);
+                break;
             }
         }
     }
