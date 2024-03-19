@@ -1,7 +1,7 @@
 use crate::{downstream_sv1::Downstream, error::{
     LotteryError::{CodecNoise, InvalidExtranonce, PoisonLock, UpstreamIncoming},
     ProxyResult,
-}, tproxy_config::UpstreamDifficultyConfig, status, tproxy, upstream_sv2::{EitherFrame, Message, StdFrame, UpstreamConnection}};
+}, tproxy::config::UpstreamDifficultyConfig, status, tproxy, upstream_sv2::{EitherFrame, Message, StdFrame, UpstreamConnection}};
 use async_channel::{Receiver, Sender};
 use async_std::{net::TcpStream, task};
 use binary_sv2::u256_from_int;

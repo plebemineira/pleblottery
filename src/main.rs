@@ -6,11 +6,8 @@ mod status;
 mod error;
 mod lottery;
 mod downstream_sv1;
-mod tproxy_config;
 mod tproxy;
 mod upstream_sv2;
-mod tproxy_utils;
-
 use async_channel::{bounded, unbounded};
 use tracing::{error, info, warn, debug};
 use tokio::select;
@@ -48,7 +45,7 @@ async fn main() {
         }
     };
 
-    let proxy_config: tproxy_config::TProxyConfig = match std::fs::read_to_string(&args.config_path) {
+    let proxy_config: tproxy::config::TProxyConfig = match std::fs::read_to_string(&args.config_path) {
         Ok(c) => match toml::from_str(&c) {
             Ok(c) => c,
             Err(e) => {
@@ -175,7 +172,7 @@ async fn lottery(config: lottery::Configuration) {
 }
 
 
-async fn tproxy(proxy_config: tproxy_config::TProxyConfig) {
+async fn tproxy(proxy_config: tproxy::config::TProxyConfig) {
     let (tx_status, rx_status) = unbounded();
 
     // `tx_sv1_bridge` sender is used by `Downstream` to send a `DownstreamMessages` message to
