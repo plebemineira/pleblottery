@@ -42,8 +42,8 @@ pub type EitherFrame = StandardEitherFrame<Message>;
 
 pub fn get_coinbase_output(config: &Configuration) -> Result<Vec<TxOut>, Error> {
     let mut result = Vec::new();
-    for coinbase_output_pool in &config.coinbase_outputs {
-        let coinbase_output: CoinbaseOutput_ = coinbase_output_pool.try_into()?;
+    for coinbase_output_lottery in &config.coinbase_outputs {
+        let coinbase_output: CoinbaseOutput_ = coinbase_output_lottery.try_into()?;
         let output_script: Script = coinbase_output.try_into()?;
         result.push(TxOut {
             value: 0,
@@ -65,12 +65,12 @@ pub struct CoinbaseOutput {
 impl TryFrom<&CoinbaseOutput> for CoinbaseOutput_ {
     type Error = Error;
 
-    fn try_from(pool_output: &CoinbaseOutput) -> Result<Self, Self::Error> {
-        match pool_output.output_script_type.as_str() {
+    fn try_from(lottery_output: &CoinbaseOutput) -> Result<Self, Self::Error> {
+        match lottery_output.output_script_type.as_str() {
             "TEST" | "P2PK" | "P2PKH" | "P2WPKH" | "P2SH" | "P2WSH" | "P2TR" => {
                 Ok(CoinbaseOutput_ {
-                    output_script_type: pool_output.clone().output_script_type,
-                    output_script_value: pool_output.clone().output_script_value,
+                    output_script_type: lottery_output.clone().output_script_type,
+                    output_script_value: lottery_output.clone().output_script_value,
                 })
             }
             _ => Err(Error::UnknownOutputScriptType),
@@ -87,7 +87,7 @@ pub struct Configuration {
     pub authority_secret_key: Secp256k1SecretKey,
     pub cert_validity_sec: u64,
     pub coinbase_outputs: Vec<CoinbaseOutput>,
-    pub pool_signature: String,
+    pub lottery_signature: String,
     #[cfg(feature = "test_only_allow_unencrypted")]
     pub test_only_listen_adress_plain: String,
 }
@@ -104,7 +104,7 @@ pub struct Downstream {
 }
 
 /// Accept downstream connection
-pub struct Pool {
+pub struct Lottery {
     downstreams: HashMap<u32, Arc<Mutex<Downstream>>, BuildNoHashHasher<u32>>,
     solution_sender: Sender<SubmitSolution<'static>>,
     new_template_processed: bool,
@@ -119,7 +119,7 @@ impl Downstream {
         mut receiver: Receiver<EitherFrame>,
         mut sender: Sender<EitherFrame>,
         solution_sender: Sender<SubmitSolution<'static>>,
-        pool: Arc<Mutex<Pool>>,
+        lottery: Arc<Mutex<Lottery>>,
         channel_factory: Arc<Mutex<PoolChannelFactory>>,
         status_tx: status::Sender<'static>,
         address: SocketAddr,
@@ -181,7 +181,7 @@ impl Downstream {
                         );
                     }
                     _ => {
-                        let res = pool
+                        let res = lottery
                             .safe_lock(|p| p.downstreams.remove(&id))
                             .map_err(|e| LotteryError::PoisonLock(e.to_string()));
                         handle_result!(status_tx, res);
@@ -223,7 +223,7 @@ impl Downstream {
             Ok(SendTo::Respond(message)) => {
                 debug!("Sending to downstream: {:?}", message);
                 // returning an error will send the error to the main thread,
-                // and the main thread will drop the downstream from the pool
+                // and the main thread will drop the downstream from the lottery
                 if let &Mining::OpenMiningChannelError(_) = &message {
                     Self::send(self_.clone(), message.clone()).await?;
                     let downstream_id = self_
@@ -311,10 +311,10 @@ impl IsDownstream for Downstream {
 
 impl IsMiningDownstream for Downstream {}
 
-impl Pool {
+impl Lottery {
     #[cfg(feature = "test_only_allow_unencrypted")]
     async fn accept_incoming_plain_connection(
-        self_: Arc<Mutex<Pool>>,
+        self_: Arc<Mutex<Lottery>>,
         config: Configuration,
     ) -> PoolResult<()> {
         let listner = TcpListener::bind(&config.test_only_listen_adress_plain)
@@ -342,7 +342,7 @@ impl Pool {
     }
 
     async fn accept_incoming_connection(
-        self_: Arc<Mutex<Pool>>,
+        self_: Arc<Mutex<Lottery>>,
         config: Configuration,
     ) -> PoolResult<'static, ()> {
         let status_tx = self_.safe_lock(|s| s.status_tx.clone())?;
@@ -389,7 +389,7 @@ impl Pool {
     }
 
     async fn accept_incoming_connection_(
-        self_: Arc<Mutex<Pool>>,
+        self_: Arc<Mutex<Lottery>>,
         receiver: Receiver<EitherFrame>,
         sender: Sender<EitherFrame>,
         address: SocketAddr,
@@ -534,8 +534,8 @@ impl Pool {
             end: extranonce_len,
         };
         let ids = Arc::new(Mutex::new(roles_logic_sv2::utils::GroupId::new()));
-        let pool_coinbase_outputs = get_coinbase_output(&config);
-        info!("PUB KEY: {:?}", pool_coinbase_outputs);
+        let lottery_coinbase_outputs = get_coinbase_output(&config);
+        info!("PUB KEY: {:?}", lottery_coinbase_outputs);
         let extranonces = ExtendedExtranonce::new(range_0, range_1, range_2);
         let creator = JobsCreators::new(extranonce_len as u8);
         let share_per_min = 1.0;
@@ -546,10 +546,10 @@ impl Pool {
             creator,
             share_per_min,
             kind,
-            pool_coinbase_outputs.expect("Invalid coinbase output in config"),
-            config.pool_signature.clone(),
+            lottery_coinbase_outputs.expect("Invalid coinbase output in config"),
+            config.lottery_signature.clone(),
         )));
-        let pool = Arc::new(Mutex::new(Pool {
+        let lottery = Arc::new(Mutex::new(Lottery {
             downstreams: HashMap::with_hasher(BuildNoHashHasher::default()),
             solution_sender,
             new_template_processed: false,
@@ -558,13 +558,13 @@ impl Pool {
             status_tx: status_tx.clone(),
         }));
 
-        let cloned = pool.clone();
-        let cloned2 = pool.clone();
-        let cloned3 = pool.clone();
+        let cloned = lottery.clone();
+        let cloned2 = lottery.clone();
+        let cloned3 = lottery.clone();
 
         #[cfg(feature = "test_only_allow_unencrypted")]
         {
-            let cloned4 = pool.clone();
+            let cloned4 = lottery.clone();
             let status_tx_clone_unenc = status_tx.clone();
             let config_unenc = config.clone();
 
@@ -587,7 +587,7 @@ impl Pool {
             });
         }
 
-        info!("Starting up pool listener");
+        info!("Starting up lottery listener");
         let status_tx_clone = status_tx.clone();
         task::spawn(async move {
             if let Err(e) = Self::accept_incoming_connection(cloned, config).await {
@@ -629,7 +629,7 @@ impl Pool {
         let status_tx_clone = status_tx;
         task::spawn(async move {
             if let Err(e) =
-                Self::on_new_template(pool, new_template_rx, sender_message_received_signal).await
+                Self::on_new_template(lottery, new_template_rx, sender_message_received_signal).await
             {
                 error!("{}", e);
             }
@@ -695,8 +695,8 @@ mod test {
         // build coinbase TX from 'job_creator::coinbase()'
 
         let mut bip34_bytes = get_bip_34_bytes(coinbase_prefix.try_into().unwrap());
-        let script_prefix_length = bip34_bytes.len() + config.pool_signature.as_bytes().len();
-        bip34_bytes.extend_from_slice(config.pool_signature.as_bytes());
+        let script_prefix_length = bip34_bytes.len() + config.lottery_signature.as_bytes().len();
+        bip34_bytes.extend_from_slice(config.lottery_signature.as_bytes());
         bip34_bytes.extend_from_slice(&vec![0; extranonce_len as usize]);
         let witness = match bip34_bytes.len() {
             0 => Witness::from_vec(vec![]),

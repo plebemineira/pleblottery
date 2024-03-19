@@ -1,6 +1,6 @@
 use crate::error::{LotteryError, PoolResult};
 use crate::{
-    mining_pool::{EitherFrame, StdFrame},
+    lottery::{EitherFrame, StdFrame},
 };
 
 use async_channel::{Receiver, Sender};

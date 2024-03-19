@@ -1,7 +1,7 @@
 use crate::status;
 use crate::error::{LotteryError, PoolResult};
 use crate::{
-    mining_pool::{EitherFrame, StdFrame},
+    lottery::{EitherFrame, StdFrame},
 };
 use async_channel::{Receiver, Sender};
 use codec_sv2::{Frame, HandshakeRole, Initiator};

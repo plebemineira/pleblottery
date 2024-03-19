@@ -4,7 +4,7 @@ mod args;
 mod template_receiver;
 mod status;
 mod error;
-mod mining_pool;
+mod lottery;
 mod downstream_sv1;
 mod tproxy_config;
 mod tproxy;
@@ -34,7 +34,7 @@ async fn main() {
         }
     };
 
-    let pool_config: mining_pool::Configuration = match std::fs::read_to_string(&args.config_path) {
+    let lottery_config: lottery::Configuration = match std::fs::read_to_string(&args.config_path) {
         Ok(c) => match toml::from_str(&c) {
             Ok(c) => c,
             Err(e) => {
@@ -62,8 +62,8 @@ async fn main() {
         }
     };
 
-    let pool_handle = task::spawn(async move {
-        pool(pool_config).await;
+    let lottery_handle = task::spawn(async move {
+        lottery(lottery_config).await;
     });
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
@@ -72,16 +72,16 @@ async fn main() {
         tproxy(proxy_config).await;
     });
 
-    futures::future::join_all(vec![pool_handle, tproxy_handle]).await;
+    futures::future::join_all(vec![lottery_handle, tproxy_handle]).await;
 }
 
-async fn pool(config: mining_pool::Configuration) {
+async fn lottery(config: lottery::Configuration) {
     let (status_tx, status_rx) = unbounded();
     let (s_new_t, r_new_t) = bounded(10);
     let (s_prev_hash, r_prev_hash) = bounded(10);
     let (s_solution, r_solution) = bounded(10);
     let (s_message_recv_signal, r_message_recv_signal) = bounded(10);
-    let coinbase_output_result = mining_pool::get_coinbase_output(&config);
+    let coinbase_output_result = lottery::get_coinbase_output(&config);
     let coinbase_output_len = match coinbase_output_result {
         Ok(coinbase_output) => coinbase_output.len() as u32,
         Err(err) => {
@@ -108,7 +108,7 @@ async fn pool(config: mining_pool::Configuration) {
         return;
     }
 
-    let pool = mining_pool::Pool::start(
+    let lottery = lottery::Lottery::start(
         config.clone(),
         r_new_t,
         r_prev_hash,
@@ -155,7 +155,7 @@ async fn pool(config: mining_pool::Configuration) {
             }
             status::State::DownstreamInstanceDropped(downstream_id) => {
                 warn!("Dropping downstream instance {} from pool", downstream_id);
-                if pool
+                if lottery
                     .safe_lock(|p| p.remove_downstream(downstream_id))
                     .is_err()
                 {
