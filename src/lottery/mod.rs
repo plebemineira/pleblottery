@@ -1,7 +1,4 @@
-use super::{
-    error::{LotteryError, PoolResult},
-    status,
-};
+use super::{downstream_sv2, error::{LotteryError, PoolResult}, status};
 use async_channel::{Receiver, Sender};
 use binary_sv2::U256;
 use codec_sv2::{Frame, HandshakeRole, Responder, StandardEitherFrame, StandardSv2Frame};
@@ -31,6 +28,8 @@ use std::{
 use stratum_common::bitcoin::{Script, TxOut};
 use tokio::{net::TcpListener, task};
 use tracing::{debug, error, info, warn};
+
+use downstream_sv2::DownstreamSv2;
 
 pub mod setup_connection;
 use setup_connection::SetupConnectionHandler;
@@ -92,188 +91,14 @@ pub struct Configuration {
     pub test_only_listen_adress_plain: String,
 }
 
-#[derive(Debug)]
-pub struct Downstream {
-    // Either group or channel id
-    id: u32,
-    receiver: Receiver<EitherFrame>,
-    sender: Sender<EitherFrame>,
-    downstream_data: CommonDownstreamData,
-    solution_sender: Sender<SubmitSolution<'static>>,
-    channel_factory: Arc<Mutex<PoolChannelFactory>>,
-}
-
 /// Accept downstream connection
 pub struct Lottery {
-    downstreams: HashMap<u32, Arc<Mutex<Downstream>>, BuildNoHashHasher<u32>>,
+    pub downstreams_sv2: HashMap<u32, Arc<Mutex<DownstreamSv2>>, BuildNoHashHasher<u32>>,
     solution_sender: Sender<SubmitSolution<'static>>,
     new_template_processed: bool,
     channel_factory: Arc<Mutex<PoolChannelFactory>>,
     last_prev_hash_template_id: u64,
     status_tx: status::Sender<'static>,
-}
-
-impl Downstream {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        mut receiver: Receiver<EitherFrame>,
-        mut sender: Sender<EitherFrame>,
-        solution_sender: Sender<SubmitSolution<'static>>,
-        lottery: Arc<Mutex<Lottery>>,
-        channel_factory: Arc<Mutex<PoolChannelFactory>>,
-        status_tx: status::Sender<'static>,
-        address: SocketAddr,
-    ) -> PoolResult<'static, Arc<Mutex<Self>>> {
-        let setup_connection = Arc::new(Mutex::new(SetupConnectionHandler::new()));
-        let downstream_data =
-            SetupConnectionHandler::setup(setup_connection, &mut receiver, &mut sender, address)
-                .await?;
-
-        let id = match downstream_data.header_only {
-            false => channel_factory.safe_lock(|c| c.new_group_id())?,
-            true => channel_factory.safe_lock(|c| c.new_standard_id_for_hom())?,
-        };
-
-        let self_ = Arc::new(Mutex::new(Downstream {
-            id,
-            receiver,
-            sender,
-            downstream_data,
-            solution_sender,
-            channel_factory,
-        }));
-
-        let cloned = self_.clone();
-
-        task::spawn(async move {
-            debug!("Starting up downstream receiver");
-            let receiver_res = cloned
-                .safe_lock(|d| d.receiver.clone())
-                .map_err(|e| LotteryError::PoisonLock(e.to_string()));
-            let receiver = match receiver_res {
-                Ok(recv) => recv,
-                Err(e) => {
-                    if let Err(e) = status_tx
-                        .send(status::Status {
-                            state: status::State::Healthy(format!(
-                                "Downstream connection dropped: {}",
-                                e
-                            )),
-                        })
-                        .await
-                    {
-                        error!("Encountered Error but status channel is down: {}", e);
-                    }
-
-                    return;
-                }
-            };
-            loop {
-                match receiver.recv().await {
-                    Ok(received) => {
-                        let received: Result<StdFrame, _> = received
-                            .try_into()
-                            .map_err(|e| LotteryError::Codec(codec_sv2::Error::FramingSv2Error(e)));
-                        let std_frame = handle_result!(status_tx, received);
-                        handle_result!(
-                            status_tx,
-                            Downstream::next(cloned.clone(), std_frame).await
-                        );
-                    }
-                    _ => {
-                        let res = lottery
-                            .safe_lock(|p| p.downstreams.remove(&id))
-                            .map_err(|e| LotteryError::PoisonLock(e.to_string()));
-                        handle_result!(status_tx, res);
-                        error!("Downstream {} disconnected", id);
-                        break;
-                    }
-                }
-            }
-            warn!("Downstream connection dropped");
-        });
-        Ok(self_)
-    }
-
-    pub async fn next(self_mutex: Arc<Mutex<Self>>, mut incoming: StdFrame) -> PoolResult<'static, ()> {
-        let message_type = incoming
-            .get_header()
-            .ok_or_else(|| LotteryError::Custom(String::from("No header set")))?
-            .msg_type();
-        let payload = incoming.payload();
-        debug!(
-            "Received downstream message type: {:?}, payload: {:?}",
-            message_type, payload
-        );
-        let next_message_to_send = ParseDownstreamMiningMessages::handle_message_mining(
-            self_mutex.clone(),
-            message_type,
-            payload,
-            MiningRoutingLogic::None,
-        );
-        Self::match_send_to(self_mutex, next_message_to_send).await
-    }
-
-    #[async_recursion::async_recursion]
-    async fn match_send_to(
-        self_: Arc<Mutex<Self>>,
-        send_to: Result<SendTo<()>, Error>,
-    ) -> PoolResult<'static, ()> {
-        match send_to {
-            Ok(SendTo::Respond(message)) => {
-                debug!("Sending to downstream: {:?}", message);
-                // returning an error will send the error to the main thread,
-                // and the main thread will drop the downstream from the lottery
-                if let &Mining::OpenMiningChannelError(_) = &message {
-                    Self::send(self_.clone(), message.clone()).await?;
-                    let downstream_id = self_
-                        .safe_lock(|d| d.id)
-                        .map_err(|e| Error::PoisonLock(e.to_string()))?;
-                    return Err(LotteryError::Sv2ProtocolError(
-                        // (
-                        // downstream_id,
-                        message.clone(),
-                    // )
-                    ));
-                } else {
-                    Self::send(self_, message.clone()).await?;
-                }
-            }
-            Ok(SendTo::Multiple(messages)) => {
-                debug!("Sending multiple messages to downstream");
-                for message in messages {
-                    debug!("Sending downstream message: {:?}", message);
-                    Self::match_send_to(self_.clone(), Ok(message)).await?;
-                }
-            }
-            Ok(SendTo::None(_)) => {}
-            Ok(m) => {
-                error!("Unexpected SendTo: {:?}", m);
-                panic!();
-            }
-            Err(Error::UnexpectedMessage(_message_type)) => todo!(),
-            Err(e) => {
-                error!("Error: {:?}", e);
-                todo!()
-            }
-        }
-        Ok(())
-    }
-
-    async fn send(
-        self_mutex: Arc<Mutex<Self>>,
-        message: roles_logic_sv2::parsers::Mining<'static>,
-    ) -> PoolResult<()> {
-        //let message = if let Mining::NewExtendedMiningJob(job) = message {
-        //    Mining::NewExtendedMiningJob(extended_job_to_non_segwit(job, 32)?)
-        //} else {
-        //    message
-        //};
-        let sv2_frame: StdFrame = PoolMessages::Mining(message).try_into()?;
-        let sender = self_mutex.safe_lock(|self_| self_.sender.clone())?;
-        sender.send(sv2_frame.into()).await?;
-        Ok(())
-    }
 }
 
 // Verifies token for a custom job which is the signed tx_hash_list_hash by Job Declarator Server
@@ -303,13 +128,13 @@ pub fn verify_token(
     is_verified
 }
 
-impl IsDownstream for Downstream {
+impl IsDownstream for DownstreamSv2 {
     fn get_downstream_mining_data(&self) -> CommonDownstreamData {
         self.downstream_data
     }
 }
 
-impl IsMiningDownstream for Downstream {}
+impl IsMiningDownstream for DownstreamSv2 {}
 
 impl Lottery {
     #[cfg(feature = "test_only_allow_unencrypted")]
@@ -398,7 +223,7 @@ impl Lottery {
         let status_tx = self_.safe_lock(|s| s.status_tx.clone())?;
         let channel_factory = self_.safe_lock(|s| s.channel_factory.clone())?;
 
-        let downstream = Downstream::new(
+        let downstream = DownstreamSv2::new(
             receiver,
             sender,
             solution_sender,
@@ -413,7 +238,7 @@ impl Lottery {
         let (_, channel_id) = downstream.safe_lock(|d| (d.downstream_data.header_only, d.id))?;
 
         self_.safe_lock(|p| {
-            p.downstreams.insert(channel_id, downstream);
+            p.downstreams_sv2.insert(channel_id, downstream);
         })?;
         Ok(())
     }
@@ -447,7 +272,7 @@ impl Lottery {
             match job_id {
                 Ok(job_id) => {
                     let downstreams = self_
-                        .safe_lock(|s| s.downstreams.clone())
+                        .safe_lock(|s| s.downstreams_sv2.clone())
                         .map_err(|e| LotteryError::PoisonLock(e.to_string()));
                     let downstreams = handle_result!(status_tx, downstreams);
 
@@ -459,7 +284,7 @@ impl Lottery {
                             min_ntime: new_prev_hash.header_timestamp,
                             nbits: new_prev_hash.n_bits,
                         });
-                        let res = Downstream::match_send_to(
+                        let res = DownstreamSv2::match_send_to(
                             downtream.clone(),
                             Ok(SendTo::Respond(message)),
                         )
@@ -494,14 +319,14 @@ impl Lottery {
             let mut messages = handle_result!(status_tx, messages);
 
             let downstreams = self_
-                .safe_lock(|s| s.downstreams.clone())
+                .safe_lock(|s| s.downstreams_sv2.clone())
                 .map_err(|e| LotteryError::PoisonLock(e.to_string()));
             let downstreams = handle_result!(status_tx, downstreams);
 
             for (channel_id, downtream) in downstreams {
                 if let Some(to_send) = messages.remove(&channel_id) {
                     if let Err(e) =
-                        Downstream::match_send_to(downtream.clone(), Ok(SendTo::Respond(to_send)))
+                        DownstreamSv2::match_send_to(downtream.clone(), Ok(SendTo::Respond(to_send)))
                             .await
                     {
                         error!("Unknown template provider message: {:?}", e);
@@ -550,7 +375,7 @@ impl Lottery {
             config.lottery_signature.clone(),
         )));
         let lottery = Arc::new(Mutex::new(Lottery {
-            downstreams: HashMap::with_hasher(BuildNoHashHasher::default()),
+            downstreams_sv2: HashMap::with_hasher(BuildNoHashHasher::default()),
             solution_sender,
             new_template_processed: false,
             channel_factory,
@@ -561,31 +386,6 @@ impl Lottery {
         let cloned = lottery.clone();
         let cloned2 = lottery.clone();
         let cloned3 = lottery.clone();
-
-        #[cfg(feature = "test_only_allow_unencrypted")]
-        {
-            let cloned4 = lottery.clone();
-            let status_tx_clone_unenc = status_tx.clone();
-            let config_unenc = config.clone();
-
-            task::spawn(async move {
-                if let Err(e) = Self::accept_incoming_plain_connection(cloned4, config_unenc).await
-                {
-                    error!("{}", e);
-                }
-                if status_tx_clone_unenc
-                    .send(status::Status {
-                        state: status::State::DownstreamShutdown(LotteryError::ComponentShutdown(
-                            "Downstream no longer accepting incoming connections".to_string(),
-                        )),
-                    })
-                    .await
-                    .is_err()
-                {
-                    error!("Downstream shutdown and Status Channel dropped");
-                }
-            });
-        }
 
         info!("Starting up lottery listener");
         let status_tx_clone = status_tx.clone();
@@ -655,152 +455,6 @@ impl Lottery {
     /// downstream. This is going to be rare and will won't cause any issues as the attempt to communicate
     /// will fail but continue with the next downstream.
     pub fn remove_downstream(&mut self, downstream_id: u32) {
-        self.downstreams.remove(&downstream_id);
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use binary_sv2::{B0255, B064K};
-    use std::convert::TryInto;
-
-    use stratum_common::{
-        bitcoin,
-        bitcoin::{util::psbt::serialize::Serialize, Transaction, Witness},
-    };
-
-    // this test is used to verify the `coinbase_tx_prefix` and `coinbase_tx_suffix` values tested against in
-    // message generator `stratum/test/message-generator/test/pool-sri-test-extended.json`
-    #[test]
-    fn test_coinbase_outputs_from_config() {
-        // Load config
-        let config: super::Configuration = toml::from_str(
-            &std::fs::read_to_string("./config-examples/pool-config-local-tp-example.toml")
-                .unwrap(),
-        )
-            .unwrap();
-        // template from message generator test (mock TP template)
-        let _extranonce_len = 3;
-        let coinbase_prefix = vec![3, 76, 163, 38, 0];
-        let _version = 536870912;
-        let coinbase_tx_version = 2;
-        let coinbase_tx_input_sequence = 4294967295;
-        let _coinbase_tx_value_remaining: u64 = 625000000;
-        let _coinbase_tx_outputs_count = 0;
-        let coinbase_tx_locktime = 0;
-        let coinbase_tx_outputs: Vec<bitcoin::TxOut> = super::get_coinbase_output(&config).unwrap();
-        // extranonce len set to max_extranonce_size in `ChannelFactory::new_extended_channel()`
-        let extranonce_len = 32;
-
-        // build coinbase TX from 'job_creator::coinbase()'
-
-        let mut bip34_bytes = get_bip_34_bytes(coinbase_prefix.try_into().unwrap());
-        let script_prefix_length = bip34_bytes.len() + config.lottery_signature.as_bytes().len();
-        bip34_bytes.extend_from_slice(config.lottery_signature.as_bytes());
-        bip34_bytes.extend_from_slice(&vec![0; extranonce_len as usize]);
-        let witness = match bip34_bytes.len() {
-            0 => Witness::from_vec(vec![]),
-            _ => Witness::from_vec(vec![vec![0; 32]]),
-        };
-
-        let tx_in = bitcoin::TxIn {
-            previous_output: bitcoin::OutPoint::null(),
-            script_sig: bip34_bytes.into(),
-            sequence: bitcoin::Sequence(coinbase_tx_input_sequence),
-            witness,
-        };
-        let coinbase = bitcoin::Transaction {
-            version: coinbase_tx_version,
-            lock_time: bitcoin::PackedLockTime(coinbase_tx_locktime),
-            input: vec![tx_in],
-            output: coinbase_tx_outputs,
-        };
-
-        let coinbase_tx_prefix = coinbase_tx_prefix(&coinbase, script_prefix_length);
-        let coinbase_tx_suffix =
-            coinbase_tx_suffix(&coinbase, extranonce_len, script_prefix_length);
-        assert!(
-            coinbase_tx_prefix
-                == [
-                2, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 56, 3, 76, 163, 38,
-                0, 83, 116, 114, 97, 116, 117, 109, 32, 118, 50, 32, 83, 82, 73, 32, 80, 111,
-                111, 108
-            ]
-                .to_vec()
-                .try_into()
-                .unwrap(),
-            "coinbase_tx_prefix incorrect"
-        );
-        assert!(
-            coinbase_tx_suffix
-                == [
-                255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0, 20, 235, 225, 183, 220,
-                194, 147, 204, 170, 14, 231, 67, 168, 111, 137, 223, 130, 88, 194, 8, 252, 1,
-                32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-            ]
-                .to_vec()
-                .try_into()
-                .unwrap(),
-            "coinbase_tx_suffix incorrect"
-        );
-    }
-
-    // copied from roles-logic-sv2::job_creator
-    fn coinbase_tx_prefix(coinbase: &Transaction, script_prefix_len: usize) -> B064K<'static> {
-        let encoded = coinbase.serialize();
-        // If script_prefix_len is not 0 we are not in a test enviornment and the coinbase have the 0
-        // witness
-        let segwit_bytes = match script_prefix_len {
-            0 => 0,
-            _ => 2,
-        };
-        let index = 4    // tx version
-            + segwit_bytes
-            + 1  // number of inputs TODO can be also 3
-            + 32 // prev OutPoint
-            + 4  // index
-            + 1  // bytes in script TODO can be also 3
-            + script_prefix_len; // bip34_bytes
-        let r = encoded[0..index].to_vec();
-        r.try_into().unwrap()
-    }
-
-    // copied from roles-logic-sv2::job_creator
-    fn coinbase_tx_suffix(
-        coinbase: &Transaction,
-        extranonce_len: u8,
-        script_prefix_len: usize,
-    ) -> B064K<'static> {
-        let encoded = coinbase.serialize();
-        // If script_prefix_len is not 0 we are not in a test enviornment and the coinbase have the 0
-        // witness
-        let segwit_bytes = match script_prefix_len {
-            0 => 0,
-            _ => 2,
-        };
-        let r = encoded[4    // tx version
-            + segwit_bytes
-            + 1  // number of inputs TODO can be also 3
-            + 32 // prev OutPoint
-            + 4  // index
-            + 1  // bytes in script TODO can be also 3
-            + script_prefix_len  // bip34_bytes
-            + (extranonce_len as usize)..]
-            .to_vec();
-        r.try_into().unwrap()
-    }
-
-    fn get_bip_34_bytes(coinbase_prefix: B0255<'static>) -> Vec<u8> {
-        let script_prefix = &coinbase_prefix.to_vec()[..];
-        // add 1 cause 0 is push 1 2 is 1 is push 2 ecc ecc
-        // add 1 cause in the len there is also the op code itself
-        let bip34_len = script_prefix[0] as usize + 2;
-        if bip34_len == script_prefix.len() {
-            script_prefix[0..bip34_len].to_vec()
-        } else {
-            panic!("bip34 length does not match script prefix")
-        }
+        self.downstreams_sv2.remove(&downstream_id);
     }
 }

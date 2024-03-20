@@ -1,4 +1,4 @@
-use super::super::lottery::Downstream;
+use super::super::lottery::DownstreamSv2;
 use roles_logic_sv2::{
     errors::Error,
     handlers::mining::{ParseDownstreamMiningMessages, SendTo, SupportedChannelTypes},
@@ -12,7 +12,7 @@ use roles_logic_sv2::{
 use std::{convert::TryInto, sync::Arc};
 use tracing::error;
 
-impl ParseDownstreamMiningMessages<(), NullDownstreamMiningSelector, NoRouting> for Downstream {
+impl ParseDownstreamMiningMessages<(), NullDownstreamMiningSelector, NoRouting> for DownstreamSv2 {
     fn get_channel_type(&self) -> SupportedChannelTypes {
         SupportedChannelTypes::GroupAndExtended
     }

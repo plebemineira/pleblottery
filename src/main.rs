@@ -8,6 +8,8 @@ mod lottery;
 mod downstream_sv1;
 mod tproxy;
 mod upstream_sv2;
+mod downstream_sv2;
+
 use async_channel::{bounded, unbounded};
 use tracing::{error, info, warn, debug};
 use tokio::select;
@@ -73,6 +75,7 @@ async fn main() {
 }
 
 async fn lottery(config: lottery::Configuration) {
+
     let (status_tx, status_rx) = unbounded();
     let (s_new_t, r_new_t) = bounded(10);
     let (s_prev_hash, r_prev_hash) = bounded(10);
