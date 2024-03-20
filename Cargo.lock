@@ -1002,31 +1002,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "523dc4f511e55ab87b694dc30d0f820d60906ef06413f93d4d7a1385599cc149"
 
 [[package]]
-name = "mining_proxy_sv2"
-version = "0.1.0"
-source = "git+https://github.com/stratum-mining/stratum.git#361f12ba72053422d64bfcb7ab010d5d45e1f0a5"
-dependencies = [
- "async-channel 1.9.0",
- "async-recursion 0.3.2",
- "binary_sv2",
- "buffer_sv2",
- "codec_sv2",
- "const_sv2",
- "futures",
- "key-utils",
- "network_helpers",
- "nohash-hasher",
- "once_cell",
- "roles_logic_sv2",
- "serde",
- "stratum-common",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "mining_sv2"
 version = "0.1.1"
 source = "git+https://github.com/stratum-mining/stratum.git#361f12ba72053422d64bfcb7ab010d5d45e1f0a5"
@@ -1195,7 +1170,6 @@ dependencies = [
  "async-channel 1.9.0",
  "async-std",
  "futures",
- "mining_proxy_sv2",
  "pool_sv2",
  "roles_logic_sv2",
  "sv1_api",

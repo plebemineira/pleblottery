@@ -12,7 +12,6 @@ toml = { version = "*", git = "https://github.com/diondokter/toml-rs", default-f
 
 pool_sv2 = { git = "https://github.com/stratum-mining/stratum.git" }
 translator_sv2 = { git = "https://github.com/stratum-mining/stratum.git" }
-mining_proxy_sv2 = { git = "https://github.com/stratum-mining/stratum.git" }
 roles_logic_sv2 = { git = "https://github.com/stratum-mining/stratum.git" }
 sv1_api = { git = "https://github.com/stratum-mining/stratum.git" }
 async-channel = "1.9.0"
