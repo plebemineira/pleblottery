@@ -3,7 +3,7 @@ use sv1_api::{client_to_server::Submit, utils::HexU32Be};
 pub mod diff_management;
 pub mod downstream;
 
-pub use downstream::Downstream;
+pub use downstream::DownstreamSv1;
 
 /// This constant is used as a check to ensure clients
 /// do not send a mining.subscribe and never a mining.authorize

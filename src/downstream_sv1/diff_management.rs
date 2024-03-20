@@ -1,4 +1,4 @@
-use super::{Downstream, DownstreamMessages, SetDownstreamTarget};
+use super::{DownstreamSv1, DownstreamMessages, SetDownstreamTarget};
 
 use crate::error::{LotteryError, ProxyResult};
 use roles_logic_sv2::utils::Mutex;
@@ -7,7 +7,7 @@ use sv1_api::json_rpc;
 
 use stratum_common::bitcoin::util::uint::Uint256;
 
-impl Downstream {
+impl DownstreamSv1 {
     /// initializes the timestamp and resets the number of submits for a connection.
     /// Should only be called once for the lifetime of a connection since `try_update_difficulty_settings()`
     /// also does this during this update
@@ -107,13 +107,13 @@ impl Downstream {
             tracing::debug!("New target from hashrate: {:?}", new_target.inner_as_ref());
             let message = Self::get_set_difficulty(new_target.to_vec())?;
             // send mining.set_difficulty to miner
-            Downstream::send_message_downstream(self_.clone(), message).await?;
+            DownstreamSv1::send_message_downstream(self_.clone(), message).await?;
             let update_target_msg = SetDownstreamTarget {
                 channel_id,
                 new_target: new_target.into(),
             };
             // notify bridge of target update
-            Downstream::send_message_upstream(
+            DownstreamSv1::send_message_upstream(
                 self_.clone(),
                 DownstreamMessages::SetDownstreamTarget(update_target_msg),
             )
@@ -154,7 +154,7 @@ impl Downstream {
     /// be sent to the Downstream role.
     #[allow(clippy::result_large_err)]
     pub(super) fn get_set_difficulty(target: Vec<u8>) -> ProxyResult<'static, json_rpc::Message> {
-        let value = Downstream::difficulty_from_target(target)?;
+        let value = DownstreamSv1::difficulty_from_target(target)?;
         tracing::debug!("Difficulty from target: {:?}", value);
         let set_target = sv1_api::methods::server_to_client::SetDifficulty { value };
         let message: json_rpc::Message = set_target.into();
@@ -171,7 +171,7 @@ impl Downstream {
         tracing::debug!("Target: {:?}", target);
 
         // If received target is 0, return 0
-        if Downstream::is_zero(target) {
+        if DownstreamSv1::is_zero(target) {
             return Ok(0.0);
         }
         let target = Uint256::from_be_slice(target)?;
@@ -315,7 +315,7 @@ mod test {
         time::{Duration, Instant},
     };
 
-    use crate::downstream_sv1::Downstream;
+    use crate::downstream_sv1::DownstreamSv1;
 
     #[test]
     fn test_diff_management() {
@@ -426,7 +426,7 @@ mod test {
         };
         let (tx_sv1_submit, _rx_sv1_submit) = unbounded();
         let (tx_outgoing, _rx_outgoing) = unbounded();
-        let mut downstream = Downstream::new(
+        let mut downstream = DownstreamSv1::new(
             1,
             vec![],
             vec![],
@@ -464,14 +464,14 @@ mod test {
             Err(_) => panic!(),
         };
         let downstream = Arc::new(Mutex::new(downstream));
-        Downstream::init_difficulty_management(downstream.clone(), initial_target.inner_as_ref())
+        DownstreamSv1::init_difficulty_management(downstream.clone(), initial_target.inner_as_ref())
             .await
             .unwrap();
         let mut share = generate_random_80_byte_array();
         while elapsed <= total_run_time {
             mock_mine(initial_target.clone().into(), &mut share);
-            Downstream::save_share(downstream.clone()).unwrap();
-            Downstream::try_update_difficulty_settings(downstream.clone())
+            DownstreamSv1::save_share(downstream.clone()).unwrap();
+            DownstreamSv1::try_update_difficulty_settings(downstream.clone())
                 .await
                 .unwrap();
             initial_target = downstream

@@ -304,7 +304,7 @@ async fn tproxy(proxy_config: tproxy::config::TProxyConfig) {
         );
 
         // Accept connections from one or more SV1 Downstream roles (SV1 Mining Devices)
-        downstream_sv1::Downstream::accept_connections(
+        downstream_sv1::DownstreamSv1::accept_connections(
             downstream_addr,
             tx_sv1_bridge,
             tx_sv1_notify,

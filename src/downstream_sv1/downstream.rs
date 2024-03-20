@@ -42,7 +42,7 @@ const MAX_LINE_LENGTH: usize = 2_usize.pow(16);
 /// Handles the sending and receiving of messages to and from an SV2 Upstream role (most typically
 /// a SV2 Pool server).
 #[derive(Debug)]
-pub struct Downstream {
+pub struct DownstreamSv1 {
     /// List of authorized Downstream Mining Devices.
     pub(super) connection_id: u32,
     authorized_names: Vec<String>,
@@ -66,7 +66,7 @@ pub struct Downstream {
     pub(super) upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
 }
 
-impl Downstream {
+impl DownstreamSv1 {
     #[cfg(test)]
     pub fn new(
         connection_id: u32,
@@ -81,7 +81,7 @@ impl Downstream {
         difficulty_mgmt: DownstreamDifficultyConfig,
         upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
     ) -> Self {
-        Downstream {
+        DownstreamSv1 {
             connection_id,
             authorized_names,
             extranonce1,
@@ -120,7 +120,7 @@ impl Downstream {
         // Used to send SV1 `mining.notify` messages to the Downstreams
         let _socket_writer_notify = socket_writer;
 
-        let downstream = Arc::new(Mutex::new(Downstream {
+        let downstream = Arc::new(Mutex::new(DownstreamSv1 {
             connection_id,
             authorized_names: vec![],
             extranonce1,
@@ -269,14 +269,14 @@ impl Downstream {
                         handle_result!(tx_status_notify, Self::get_set_difficulty(target));
                     handle_result!(
                         tx_status_notify,
-                        Downstream::send_message_downstream(downstream.clone(), message).await
+                        DownstreamSv1::send_message_downstream(downstream.clone(), message).await
                     );
 
                     let sv1_mining_notify_msg = last_notify.clone().unwrap();
                     let message: json_rpc::Message = sv1_mining_notify_msg.into();
                     handle_result!(
                         tx_status_notify,
-                        Downstream::send_message_downstream(downstream.clone(), message).await
+                        DownstreamSv1::send_message_downstream(downstream.clone(), message).await
                     );
                     if let Err(_e) = downstream.clone().safe_lock(|s| {
                         s.first_job_received = true;
@@ -295,7 +295,7 @@ impl Downstream {
 
                             let sv1_mining_notify_msg = handle_result!(tx_status_notify, res);
                             let message: json_rpc::Message = sv1_mining_notify_msg.into();
-                            handle_result!(tx_status_notify, Downstream::send_message_downstream(downstream.clone(), message).await);
+                            handle_result!(tx_status_notify, DownstreamSv1::send_message_downstream(downstream.clone(), message).await);
                         },
                         _ = rx_shutdown.recv().fuse() => {
                                 break;
@@ -348,7 +348,7 @@ impl Downstream {
                 match open_sv1_downstream {
                     Ok(opened) => {
                         info!("PROXY SERVER - ACCEPTING FROM DOWNSTREAM: {}", host);
-                        Downstream::new_downstream(
+                        DownstreamSv1::new_downstream(
                             stream,
                             opened.channel_id,
                             tx_sv1_submit.clone(),
@@ -428,7 +428,7 @@ impl Downstream {
 }
 
 /// Implements `IsServer` for `Downstream` to handle the SV1 messages.
-impl IsServer<'static> for Downstream {
+impl IsServer<'static> for DownstreamSv1 {
     /// Handle the incoming `mining.configure` message which is received after a Downstream role is
     /// subscribed and authorized. Contains the version rolling mask parameters.
     fn handle_configure(
@@ -571,9 +571,9 @@ impl IsServer<'static> for Downstream {
     }
 }
 
-impl IsMiningDownstream for Downstream {}
+impl IsMiningDownstream for DownstreamSv1 {}
 
-impl IsDownstream for Downstream {
+impl IsDownstream for DownstreamSv1 {
     fn get_downstream_mining_data(
         &self,
     ) -> roles_logic_sv2::common_properties::CommonDownstreamData {
@@ -591,7 +591,7 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 255, 127,
             0, 0, 0, 0, 0,
         ];
-        let actual = Downstream::difficulty_from_target(target).unwrap();
+        let actual = DownstreamSv1::difficulty_from_target(target).unwrap();
         let expect = 512.0;
         assert_eq!(actual, expect);
     }
